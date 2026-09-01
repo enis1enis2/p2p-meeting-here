@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pro P2P WebRTC Suite</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: #121212; color: #fff; margin: 0; padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+    h1 { margin: 0 0 5px 0; font-size: 1.4rem; }
+    .status { color: #888; font-size: 0.85rem; margin-bottom: 15px; }
+
+    .layout { display: grid; grid-template-columns: 2fr 1fr; gap: 15px; width: 100%; max-width: 1200px; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+    .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-bottom: 10px; }
+    .video-card { background: #1e1e1e; border-radius: 8px; overflow: hidden; position: relative; aspect-ratio: 16/9; border: 2px solid transparent; }
+    .video-card.speaking { border-color: #00ff66; box-shadow: 0 0 10px rgba(0, 255, 102, 0.4); }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    .label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
+
+    .control-panel { background: #1e1e1e; padding: 12px; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    select, input[type="text"] { padding: 8px; border-radius: 6px; border: 1px solid #333; background: #222; color: #fff; font-size: 0.85rem; }
+    button { padding: 8px 12px; border-radius: 6px; border: none; background: #0070f3; color: white; font-weight: bold; cursor: pointer; font-size: 0.85rem; }
+    button:hover { background: #0051a2; }
+    button.active { background: #e53e3e; }
+    button.secondary { background: #333; }
+    button.secondary:hover { background: #444; }
+
+    .panel-box { background: #1e1e1e; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; }
+    .panel-title { font-size: 0.9rem; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px; margin: 0; }
+
+    canvas { background: #000; border-radius: 6px; cursor: crosshair; width: 100%; height: 200px; touch-action: none; }
+    .chat-messages { height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; background: #121212; padding: 8px; border-radius: 6px; font-size: 0.8rem; }
+    .message.me { color: #0070f3; align-self: flex-end; }
+    .message.peer { color: #00ff66; align-self: flex-start; }
+
+    progress { width: 100%; height: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>WebRTC P2P Suite</h1>
+  <div class="status" id="status-text">Initializing media & peer connection...</div>
+
+  <div class="layout">
+    <!-- Left Column: Video & Media Controls -->
+    <div>
+      <div class="video-grid">
+        <div class="video-card" id="local-card">
+          <video id="local-video" autoplay muted playsinline></video>
+          <div class="label">You (Local)</div>
+        </div>
+        <div class="video-card" id="remote-card">
+          <video id="remote-video" autoplay playsinline></video>
+          <div class="label">Peer (Remote)</div>
+        </div>
+      </div>
+
+      <!-- In-Call & Device Controls -->
+      <div class="control-panel">
+        <button id="audio-btn" onclick="toggleAudio()">Mute Mic</button>
+        <button id="video-btn" onclick="toggleVideo()">Stop Cam</button>
+        <button id="rec-btn" class="secondary" onclick="toggleRecord()">Record Call</button>
+        <button id="lock-btn" class="secondary" onclick="toggleLock()">Lock Room</button>
+        
+        <select id="mic-select" onchange="changeAudioInput()"></select>
+        <select id="cam-select" onchange="changeVideoInput()"></select>
+        
+        <label style="font-size: 0.8rem;"><input type="checkbox" id="privacy-mode" onchange="reinitPeer()"> Privacy Relay (TURN Only)</label>
+      </div>
+
+      <div class="control-panel" style="margin-top: 10px;">
+        <input type="text" id="my-id-input" readonly placeholder="Your Peer ID...">
+        <button onclick="copyMyId()">Copy ID</button>
+        <input type="text" id="peer-id-input" placeholder="Paste Peer ID...">
+        <button onclick="connectToPeer()">Call Peer</button>
+        <button class="active" onclick="endCall()">End Call</button>
+      </div>
+    </div>
+
+    <!-- Right Column: Whiteboard, File Transfer & Chat -->
+    <div>
+      <!-- Shared Whiteboard -->
+      <div class="panel-box">
+        <div class="panel-title">Shared Whiteboard</div>
+        <canvas id="whiteboard"></canvas>
+        <button class="secondary" onclick="clearWhiteboard(true)">Clear Canvas</button>
+      </div>
+
+      <!-- File Transfer & Chat -->
+      <div class="panel-box">
+        <div class="panel-title">File Transfer & Chat</div>
+        <input type="file" id="file-input">
+        <button class="secondary" onclick="sendFile()">Send File</button>
+        <progress id="file-progress" value="0" max="100" style="display:none;"></progress>
+        
+        <div class="chat-messages" id="chat-messages"></div>
+        <div style="display: flex; gap: 5px;">
+          <input type="text" id="chat-input" placeholder="Type a message..." style="flex: 1;">
+          <button onclick="sendChatMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let localStream, peer, activeCall, dataConnection;
+    let isAudioMuted = false, isVideoStopped = false, isRoomLocked = false;
+    let mediaRecorder, recordedChunks = [];
+    let receivedChunks = [], incomingFileInfo = null;
+
+    // Canvas State
+    const canvas = document.getElementById('whiteboard');
+    const ctx = canvas.getContext('2d');
+    let isDrawing = false;
+
+    // Resize canvas resolution to display size
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+
+    // 1. Initialize Media Devices & Active Speaker Detector
+    async function initMedia() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('local-video').srcObject = localStream;
+        await populateDeviceSelectors();
+        setupAudioAnalyser(localStream, 'local-card');
+        initPeer();
+      } catch (err) {
+        document.getElementById('status-text').innerText = "Media Error: " + err.message;
+      }
+    }
+
+    // 2. PeerJS Setup with Metered OpenRelay TURN Fallback
+    function initPeer() {
+      if (peer) peer.destroy();
+
+      const useRelayOnly = document.getElementById('privacy-mode').checked;
+      
+      peer = new Peer({
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { 
+              urls: 'turn:openrelay.metered.ca:80',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            }
+          ],
+          iceTransportPolicy: useRelayOnly ? 'relay' : 'all'
+        }
+      });
+
+      peer.on('open', id => {
+        document.getElementById('my-id-input').value = id;
+        document.getElementById('status-text').innerText = "Ready to connect.";
+      });
+
+      // Handle Incoming Call
+      peer.on('call', call => {
+        if (isRoomLocked) {
+          call.close();
+          return alert("Call rejected: Room is locked.");
+        }
+        activeCall = call;
+        call.answer(localStream);
+        call.on('stream', stream => handleRemoteStream(stream));
+        call.on('close', () => endCall());
+      });
+
+      // Handle Incoming Data Channel
+      peer.on('connection', conn => {
+        if (isRoomLocked) return conn.close();
+        dataConnection = conn;
+        setupDataListeners();
+      });
+    }
+
+    function connectToPeer() {
+      const peerId = document.getElementById('peer-id-input').value.trim();
+      if (!peerId) return alert("Enter Peer ID");
+
+      dataConnection = peer.connect(peerId);
+      setupDataListeners();
+
+      activeCall = peer.call(peerId, localStream);
+      activeCall.on('stream', stream => handleRemoteStream(stream));
+      activeCall.on('close', () => endCall());
+    }
+
+    function handleRemoteStream(stream) {
+      document.getElementById('remote-video').srcObject = stream;
+      document.getElementById('status-text').innerText = "Connected to peer.";
+      setupAudioAnalyser(stream, 'remote-card');
+    }
+
+    // 3. Audio & Video In-Call Controls
+    function toggleAudio() {
+      isAudioMuted = !isAudioMuted;
+      localStream.getAudioTracks()[0].enabled = !isAudioMuted;
+      document.getElementById('audio-btn').innerText = isAudioMuted ? "Unmute Mic" : "Mute Mic";
+      document.getElementById('audio-btn').classList.toggle('active', isAudioMuted);
+    }
+
+    function toggleVideo() {
+      isVideoStopped = !isVideoStopped;
+      localStream.getVideoTracks()[0].enabled = !isVideoStopped;
+      document.getElementById('video-btn').innerText = isVideoStopped ? "Start Cam" : "Stop Cam";
+      document.getElementById('video-btn').classList.toggle('active', isVideoStopped);
+    }
+
+    function toggleLock() {
+      isRoomLocked = !isRoomLocked;
+      document.getElementById('lock-btn').innerText = isRoomLocked ? "Unlock Room" : "Lock Room";
+      document.getElementById('lock-btn').classList.toggle('active', isRoomLocked);
+    }
+
+    // 4. Device Selector Enumerate & Change
+    async function populateDeviceSelectors() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const micSelect = document.getElementById('mic-select');
+      const camSelect = document.getElementById('cam-select');
+
+      micSelect.innerHTML = ''; camSelect.innerHTML = '';
+
+      devices.forEach(dev => {
+        const opt = document.createElement('option');
+        opt.value = dev.deviceId;
+        opt.text = dev.label || `${dev.kind} (${dev.deviceId.slice(0,5)})`;
+
+        if (dev.kind === 'audioinput') micSelect.appendChild(opt);
+        if (dev.kind === 'videoinput') camSelect.appendChild(opt);
+      });
+    }
+
+    async function changeAudioInput() {
+      const deviceId = document.getElementById('mic-select').value;
+      const newStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+      const newTrack = newStream.getAudioTracks()[0];
+
+      const sender = activeCall?.peerConnection.getSenders().find(s => s.track.kind === 'audio');
+      if (sender) sender.replaceTrack(newTrack);
+
+      localStream.removeTrack(localStream.getAudioTracks()[0]);
+      localStream.addTrack(newTrack);
+    }
+
+    async function changeVideoInput() {
+      const deviceId = document.getElementById('cam-select').value;
+      const newStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+      const newTrack = newStream.getVideoTracks()[0];
+
+      const sender = activeCall?.peerConnection.getSenders().find(s => s.track.kind === 'video');
+      if (sender) sender.replaceTrack(newTrack);
+
+      localStream.removeTrack(localStream.getVideoTracks()[0]);
+      localStream.addTrack(newTrack);
+      document.getElementById('local-video').srcObject = localStream;
+    }
+
+    // 5. Active Speaker Detector (Web Audio API)
+    function setupAudioAnalyser(stream, cardId) {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 64;
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const card = document.getElementById(cardId);
+
+      setInterval(() => {
+        analyser.getByteFrequencyData(dataArray);
+        const avgVolume = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+        if (avgVolume > 15) {
+          card.classList.add('speaking');
+        } else {
+          card.classList.remove('speaking');
+        }
+      }, 200);
+    }
+
+    // 6. Data Channel Protocol (Chat, File Sharing, Whiteboard)
+    function setupDataListeners() {
+      dataConnection.on('data', data => {
+        // Handle JSON payloads
+        if (typeof data === 'object' && !(data instanceof ArrayBuffer)) {
+          if (data.type === 'chat') appendMessage(data.text, 'peer');
+          if (data.type === 'draw') drawOnCanvas(data.x1, data.y1, data.x2, data.y2, false);
+          if (data.type === 'clear') clearWhiteboard(false);
+          if (data.type === 'file-meta') {
+            incomingFileInfo = data;
+            receivedChunks = [];
+          }
+        } 
+        // Handle binary file chunks
+        else if (data instanceof ArrayBuffer) {
+          receivedChunks.push(data);
+          if (receivedChunks.reduce((acc, curr) => acc + curr.byteLength, 0) >= incomingFileInfo.size) {
+            const blob = new Blob(receivedChunks);
+            const url = URL.createObjectURL(blob);
+            appendMessage(`Received File: <a href="${url}" download="${incomingFileInfo.name}" style="color:#00ff66">${incomingFileInfo.name}</a>`, 'peer');
+          }
+        }
+      });
+    }
+
+    // File Sharing via Chunking
+    async function sendFile() {
+      const file = document.getElementById('file-input').files[0];
+      if (!file || !dataConnection) return;
+
+      const chunkSize = 16384; // 16KB chunks
+      const progress = document.getElementById('file-progress');
+      progress.style.display = 'block';
+
+      dataConnection.send({ type: 'file-meta', name: file.name, size: file.size });
+
+      let offset = 0;
+      while (offset < file.size) {
+        const slice = file.slice(offset, offset + chunkSize);
+        const buffer = await slice.arrayBuffer();
+        dataConnection.send(buffer);
+        offset += chunkSize;
+        progress.value = (offset / file.size) * 100;
+      }
+
+      progress.style.display = 'none';
+      appendMessage(`Sent File: ${file.name}`, 'me');
+    }
+
+    // Chat
+    function sendChatMessage() {
+      const input = document.getElementById('chat-input');
+      if (!input.value.trim() || !dataConnection) return;
+      dataConnection.send({ type: 'chat', text: input.value });
+      appendMessage(input.value, 'me');
+      input.value = '';
+    }
+
+    function appendMessage(msg, sender) {
+      const box = document.getElementById('chat-messages');
+      const div = document.createElement('div');
+      div.className = `message ${sender}`;
+      div.innerHTML = msg;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    // Whiteboard Syncing
+    canvas.addEventListener('mousedown', startDrawing);
+    canvas.addEventListener('mousemove', draw);
+    canvas.addEventListener('mouseup', stopDrawing);
+
+    let lastX = 0, lastY = 0;
+    function startDrawing(e) {
+      isDrawing = true;
+      const rect = canvas.getBoundingClientRect();
+      lastX = e.clientX - rect.left;
+      lastY = e.clientY - rect.top;
+    }
+
+    function draw(e) {
+      if (!isDrawing) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      drawOnCanvas(lastX, lastY, x, y, true);
+      lastX = x; lastY = y;
+    }
+
+    function stopDrawing() { isDrawing = false; }
+
+    function drawOnCanvas(x1, y1, x2, y2, emit) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#0070f3';
+      ctx.lineWidth = 2;
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      if (emit && dataConnection) {
+        dataConnection.send({ type: 'draw', x1, y1, x2, y2 });
+      }
+    }
+
+    function clearWhiteboard(emit) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (emit && dataConnection) dataConnection.send({ type: 'clear' });
+    }
+
+    // 7. Local Call Recorder
+    function toggleRecord() {
+      const recBtn = document.getElementById('rec-btn');
+      
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+        recBtn.innerText = "Record Call";
+        recBtn.classList.remove('active');
+      } else {
+        recordedChunks = [];
+        const mixStream = new MediaStream([
+          ...localStream.getTracks(),
+          ...(document.getElementById('remote-video').srcObject?.getTracks() || [])
+        ]);
+
+        mediaRecorder = new MediaRecorder(mixStream);
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(recordedChunks, { type: 'video/webm' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `meeting-recording-${Date.now()}.webm`;
+          a.click();
+        };
+
+        mediaRecorder.start();
+        recBtn.innerText = "Stop Recording";
+        recBtn.classList.add('active');
+      }
+    }
+
+    function reinitPeer() { initPeer(); }
+    function endCall() { if (activeCall) activeCall.close(); }
+    function copyMyId() { navigator.clipboard.writeText(document.getElementById('my-id-input').value); }
+
+    initMedia();
+  </script>
+</body>
+</html>
