@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pro P2P WebRTC Suite</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: #121212; color: #fff; margin: 0; padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+    h1 { margin: 0 0 5px 0; font-size: 1.4rem; }
+    .status { color: #888; font-size: 0.85rem; margin-bottom: 15px; }
+
+    .layout { display: grid; grid-template-columns: 2fr 1fr; gap: 15px; width: 100%; max-width: 1200px; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+    .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-bottom: 10px; }
+    .video-card { background: #1e1e1e; border-radius: 8px; overflow: hidden; position: relative; aspect-ratio: 16/9; border: 2px solid transparent; }
+    .video-card.speaking { border-color: #00ff66; box-shadow: 0 0 10px rgba(0, 255, 102, 0.4); }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    .label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
+
+    .control-panel { background: #1e1e1e; padding: 12px; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    select, input[type="text"] { padding: 8px; border-radius: 6px; border: 1px solid #333; background: #222; color: #fff; font-size: 0.85rem; }
+    button { padding: 8px 12px; border-radius: 6px; border: none; background: #0070f3; color: white; font-weight: bold; cursor: pointer; font-size: 0.85rem; }
+    button:hover { background: #0051a2; }
+    button.active { background: #e53e3e; }
+    button.secondary { background: #333; }
+    button.secondary:hover { background: #444; }
+
+    .panel-box { background: #1e1e1e; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; }
+    .panel-title { font-size: 0.9rem; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px; margin: 0; }
+
+    canvas { background: #000; border-radius: 6px; cursor: crosshair; width: 100%; height: 200px; touch-action: none; }
+    .chat-messages { height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; background: #121212; padding: 8px; border-radius: 6px; font-size: 0.8rem; }
+    .message.me { color: #0070f3; align-self: flex-end; }
+    .message.peer { color: #00ff66; align-self: flex-start; }
+
+    progress { width: 100%; height: 10px; }
+    .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; z-index: 1000; }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <h1>WebRTC P2P Suite</h1>
+  <div class="status" id="status-text">Initializing media & peer connection...</div>
+  <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap;z-index:10;position:sticky;top:10px;background:rgba(18,18,18,0.9);padding:8px;border-radius:8px;">
+    <button class="secondary" onclick="showKahootPanel(true)" style="cursor:pointer;">Kahoot-style Rooms</button>
+    <button class="secondary" onclick="showKahootPanel(false)" style="cursor:pointer;">Hide Kahoot</button>
+  </div>
+  <div id="kahoot-panel" style="display:none;background:#1e1e1e;padding:12px;border-radius:8px;width:100%;max-width:600px;margin-bottom:15px;position:relative;z-index:20;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+      <input type="text" id="kahoot-room-code" placeholder="Room code (e.g. ABC123)" style="flex:1;min-width:120px;">
+      <button onclick="createKahootRoom()">Create Room (Host)</button>
+      <button onclick="joinKahootRoom()">Join Room</button>
+    </div>
+    <div style="font-size:0.85rem;color:#aaa;">Room ID: <span id="kahoot-room-id">-</span> | Role: <span id="kahoot-role">-</span></div>
+    <div id="kahoot-host-panel" style="display:none;margin-top:10px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <input type="text" id="kahoot-question" placeholder="Question" style="flex:2;min-width:200px;">
+        <input type="text" id="kahoot-a" placeholder="A" style="flex:1;min-width:80px;">
+        <input type="text" id="kahoot-b" placeholder="B" style="flex:1;min-width:80px;">
+        <input type="text" id="kahoot-c" placeholder="C" style="flex:1;min-width:80px;">
+        <input type="text" id="kahoot-d" placeholder="D" style="flex:1;min-width:80px;">
+        <select id="kahoot-correct"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select>
+        <button onclick="startKahootQuestion()">Start Question</button>
+      </div>
+      <div style="font-size:0.85rem;">Answers: A:<span id="kahoot-count-a">0</span> B:<span id="kahoot-count-b">0</span> C:<span id="kahoot-count-c">0</span> D:<span id="kahoot-count-d">0</span></div>
+    </div>
+    <div id="kahoot-player-panel" style="display:none;margin-top:10px;">
+      <div id="kahoot-question-display" style="font-weight:bold;margin-bottom:8px;"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button onclick="submitKahootAnswer(0)">A</button>
+        <button onclick="submitKahootAnswer(1)">B</button>
+        <button onclick="submitKahootAnswer(2)">C</button>
+        <button onclick="submitKahootAnswer(3)">D</button>
+      </div>
+      <div id="kahoot-result" style="margin-top:8px;font-size:0.85rem;"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast"></div>
+
+  <div class="layout">
+    <!-- Left Column: Video & Media Controls -->
+    <div>
+      <div class="video-grid">
+        <div class="video-card" id="local-card">
+          <video id="local-video" autoplay muted playsinline></video>
+          <div class="label">You (Local)</div>
+        </div>
+        <div class="video-card" id="remote-card">
+          <video id="remote-video" autoplay playsinline></video>
+          <div class="label">Peer (Remote)</div>
+        </div>
+      </div>
+
+      <!-- In-Call & Device Controls -->
+      <div class="control-panel">
+        <button id="audio-btn" onclick="toggleAudio()">Mute Mic</button>
+        <button id="video-btn" onclick="toggleVideo()">Stop Cam</button>
+        <button id="rec-btn" class="secondary" onclick="toggleRecord()">Record Call</button>
+        <button id="lock-btn" class="secondary" onclick="toggleLock()">Lock Room</button>
+        
+        <span style="font-size:0.8rem;">Device:</span>
+        <select id="mic-select" onchange="changeAudioInput()" aria-label="Microphone"></select>
+        <select id="cam-select" onchange="changeVideoInput()" aria-label="Camera"></select>
+        
+        <label style="font-size: 0.8rem;"><input type="checkbox" id="privacy-mode" onchange="reinitPeer()"> Privacy Relay (TURN Only)</label>
+      </div>
+
+      <div class="control-panel" style="margin-top: 10px;flex-direction:column;align-items:stretch;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <input type="text" id="my-id-input" readonly placeholder="Your Peer ID..." style="flex:1;min-width:120px;">
+          <button onclick="copyMyId()">Copy ID</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <input type="text" id="room-code-input" placeholder="Room code (e.g. ABC123)" style="flex:1;min-width:120px;">
+          <button onclick="createRoomCode()">Create Room</button>
+          <button onclick="joinRoomCode()">Join by Room</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <input type="text" id="peer-id-input" placeholder="Or paste Peer ID directly...">
+          <button onclick="connectToPeer()">Call Peer</button>
+          <button class="active" onclick="endCall()">End Call</button>
+        </div>
+        <div style="font-size:0.75rem;color:#888;">Room code maps to peer ID for easy pairing (like Kahoot/PeerPlay)</div>
+      </div>
+    </div>
+
+    <!-- Right Column: Whiteboard, File Transfer & Chat -->
+    <div>
+      <!-- Shared Whiteboard -->
+      <div class="panel-box">
+        <div class="panel-title">Shared Whiteboard</div>
+        <canvas id="whiteboard"></canvas>
+        <button class="secondary" onclick="clearWhiteboard(true)">Clear Canvas</button>
+      </div>
+
+      <!-- File Transfer & Chat -->
+      <div class="panel-box">
+        <div class="panel-title">File Transfer & Chat</div>
+        <input type="file" id="file-input">
+        <button class="secondary" onclick="sendFile()">Send File</button>
+        <progress id="file-progress" value="0" max="100" style="display:none;"></progress>
+        
+        <div class="chat-messages" id="chat-messages"></div>
+        <div style="display: flex; gap: 5px;">
+          <input type="text" id="chat-input" placeholder="Type a message..." style="flex: 1;">
+          <button onclick="sendChatMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let localStream, peer, activeCall, dataConnection;
+    let isAudioMuted = false, isVideoStopped = false, isRoomLocked = false;
+    let mediaRecorder, recordedChunks = [];
+    let receivedChunks = [], incomingFileInfo = null;
+    let incomingFileUrl = null;
+    let audioContexts = [];
+    let speakerIntervals = [];
+    let analyserMap = new WeakMap();
+    let analyserByCard = new Map();
+    let whiteboardHistory = [];
+    let whiteboardHistoryEnabled = true;
+    // Kahoot-like P2P rooms
+    let kahootRoomId = null;
+    let kahootRole = null; // 'host' or 'player'
+    let kahootPlayers = new Map();
+    let kahootCurrentQuestion = null;
+    let kahootAnswers = [0,0,0,0];
+
+    function cleanupAudioForCard(cardId) {
+      try {
+        const card = document.getElementById(cardId);
+        if (!card) return;
+        const entry = analyserByCard.get(card);
+        if (entry) {
+          try {
+            if (entry.interval) clearInterval(entry.interval);
+          } catch (e) {}
+          try {
+            if (entry.audioCtx && typeof entry.audioCtx.close === 'function') {
+              entry.audioCtx.close().catch(() => {});
+            }
+          } catch (e) {}
+          try {
+            if (entry.source && typeof entry.source.disconnect === 'function') {
+              entry.source.disconnect();
+            }
+          } catch (e) {}
+          analyserByCard.delete(card);
+          analyserMap.delete(card);
+        }
+        card.classList.remove('speaking');
+        // remove from arrays if present
+        audioContexts = audioContexts.filter(ctx => ctx && ctx !== (entry && entry.audioCtx));
+        speakerIntervals = speakerIntervals.filter(iv => iv && iv !== (entry && entry.interval));
+      } catch (e) {}
+    }
+
+    function cleanupAudio() {
+      try {
+        // cleanup all tracked
+        Array.from(analyserByCard.keys()).forEach(card => {
+          try {
+            const entry = analyserByCard.get(card);
+            if (entry) {
+              try { if (entry.interval) clearInterval(entry.interval); } catch (e) {}
+              try { if (entry.audioCtx && typeof entry.audioCtx.close === 'function') entry.audioCtx.close().catch(()=>{}); } catch (e) {}
+              try { if (entry.source && typeof entry.source.disconnect === 'function') entry.source.disconnect(); } catch (e) {}
+            }
+            card.classList.remove('speaking');
+          } catch (e) {}
+        });
+        analyserByCard.clear();
+        analyserMap = new WeakMap();
+      } catch (e) {}
+      try {
+        speakerIntervals.forEach(interval => {
+          try { clearInterval(interval); } catch (e) {}
+        });
+        speakerIntervals = [];
+      } catch (e) {}
+      try {
+        audioContexts.forEach(ctx => {
+          try {
+            if (ctx && typeof ctx.close === 'function') {
+              try { ctx.close().catch(() => {}); } catch (e) {}
+            }
+          } catch (e) {}
+        });
+        audioContexts = [];
+      } catch (e) {}
+      try {
+        document.getElementById('local-card')?.classList.remove('speaking');
+        document.getElementById('remote-card')?.classList.remove('speaking');
+      } catch (e) {}
+    }
+
+    function cleanupIncomingFile() {
+      try {
+        if (incomingFileUrl) {
+          URL.revokeObjectURL(incomingFileUrl);
+          incomingFileUrl = null;
+        }
+      } catch (e) {}
+      incomingFileInfo = null;
+      receivedChunks = [];
+    }
+
+    function escapeHtml(text) {
+      if (text == null) return '';
+      const div = document.createElement('div');
+      div.textContent = String(text);
+      return div.innerHTML;
+    }
+
+    function showToast(msg, duration = 2000) {
+      try {
+        const toast = document.getElementById('toast');
+        if (!toast) return;
+        toast.textContent = msg;
+        toast.classList.add('show');
+        setTimeout(() => {
+          toast.classList.remove('show');
+        }, duration);
+      } catch (e) {}
+    }
+
+    function showKahootPanel(show) {
+      const panel = document.getElementById('kahoot-panel');
+      if (panel) panel.style.display = show ? 'block' : 'none';
+      if (show) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function generateKahootCode() {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let code = '';
+      for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+      return code;
+    }
+
+    function createKahootRoom() {
+      try {
+        if (!peer || !peer.id) {
+          alert('Peer not ready');
+          return;
+        }
+        const code = document.getElementById('kahoot-room-code').value.trim().toUpperCase() || generateKahootCode();
+        document.getElementById('kahoot-room-code').value = code;
+        kahootRoomId = code;
+        kahootRole = 'host';
+        kahootPlayers.clear();
+        kahootAnswers = [0,0,0,0];
+        document.getElementById('kahoot-room-id').textContent = kahootRoomId;
+        document.getElementById('kahoot-role').textContent = kahootRole;
+        document.getElementById('kahoot-host-panel').style.display = 'block';
+        document.getElementById('kahoot-player-panel').style.display = 'none';
+        document.getElementById('kahoot-count-a').textContent = '0';
+        document.getElementById('kahoot-count-b').textContent = '0';
+        document.getElementById('kahoot-count-c').textContent = '0';
+        document.getElementById('kahoot-count-d').textContent = '0';
+        showToast('Kahoot room created: ' + kahootRoomId);
+      } catch (e) {
+        alert('Failed to create room');
+      }
+    }
+
+    function joinKahootRoom() {
+      try {
+        if (!peer || !peer.id) {
+          alert('Peer not ready');
+          return;
+        }
+        const code = document.getElementById('kahoot-room-code').value.trim().toUpperCase();
+        if (!code) {
+          alert('Enter room code');
+          return;
+        }
+        kahootRoomId = code;
+        kahootRole = 'player';
+        document.getElementById('kahoot-room-id').textContent = kahootRoomId;
+        document.getElementById('kahoot-role').textContent = kahootRole;
+        document.getElementById('kahoot-host-panel').style.display = 'none';
+        document.getElementById('kahoot-player-panel').style.display = 'block';
+        document.getElementById('kahoot-question-display').textContent = 'Waiting for host...';
+        document.getElementById('kahoot-result').textContent = '';
+        // Connect to host via data channel using peer ID as room code? Or use a shared peer ID scheme
+        // For demo: connect to peer with ID = kahootRoomId if exists, else just announce
+        try {
+          if (peer && dataConnection) {
+            try { dataConnection.close(); } catch(e){}
+          }
+          dataConnection = peer.connect(kahootRoomId);
+          setupDataListeners();
+          dataConnection.on('open', () => {
+            try {
+              dataConnection.send({ type: 'kahoot-join', room: kahootRoomId, peerId: peer.id });
+            } catch(e){}
+          });
+        } catch(e) {}
+        showToast('Joined room: ' + kahootRoomId);
+      } catch (e) {
+        alert('Failed to join room');
+      }
+    }
+
+    function startKahootQuestion() {
+      try {
+        if (kahootRole !== 'host') return;
+        const q = document.getElementById('kahoot-question').value.trim();
+        const a = document.getElementById('kahoot-a').value.trim();
+        const b = document.getElementById('kahoot-b').value.trim();
+        const c = document.getElementById('kahoot-c').value.trim();
+        const d = document.getElementById('kahoot-d').value.trim();
+        const correct = parseInt(document.getElementById('kahoot-correct').value);
+        kahootCurrentQuestion = { q, options: [a,b,c,d], correct, id: Date.now() };
+        kahootAnswers = [0,0,0,0];
+        document.getElementById('kahoot-count-a').textContent = '0';
+        document.getElementById('kahoot-count-b').textContent = '0';
+        document.getElementById('kahoot-count-c').textContent = '0';
+        document.getElementById('kahoot-count-d').textContent = '0';
+        if (dataConnection && dataConnection.open) {
+          try {
+            dataConnection.send({ type: 'kahoot-question', question: kahootCurrentQuestion });
+          } catch(e){}
+        }
+        showToast('Question started');
+      } catch (e) {}
+    }
+
+    function submitKahootAnswer(idx) {
+      try {
+        if (kahootRole !== 'player') return;
+        if (!kahootCurrentQuestion) {
+          document.getElementById('kahoot-result').textContent = 'No active question';
+          return;
+        }
+        if (dataConnection && dataConnection.open) {
+          try {
+            dataConnection.send({ type: 'kahoot-answer', answer: idx, qid: kahootCurrentQuestion.id, peerId: peer.id });
+            document.getElementById('kahoot-result').textContent = 'Answer submitted';
+          } catch(e) {
+            document.getElementById('kahoot-result').textContent = 'Failed to submit';
+          }
+        } else {
+          document.getElementById('kahoot-result').textContent = 'Not connected';
+        }
+      } catch (e) {}
+    }
+
+    // Canvas State
+    const canvas = document.getElementById('whiteboard');
+    const ctx = canvas.getContext('2d');
+    let isDrawing = false;
+
+    // Resize canvas resolution to display size
+    let canvasBackupDataUrl = null;
+    function resizeCanvas() {
+      try {
+        const rect = canvas.getBoundingClientRect();
+        const displayWidth = Math.max(1, Math.round(rect.width || canvas.clientWidth || 300));
+        const displayHeight = Math.max(1, Math.round(rect.height || canvas.clientHeight || 200));
+        if (canvas.width === displayWidth && canvas.height === displayHeight) return;
+        canvas.width = displayWidth;
+        canvas.height = displayHeight;
+        // redraw from history
+        redrawWhiteboard();
+        // notify peer
+        if (dataConnection && dataConnection.open) {
+          try {
+            dataConnection.send({ type: 'whiteboard-resize', width: canvas.width, height: canvas.height });
+          } catch (e) {}
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // 1. Initialize Media Devices & Active Speaker Detector
+    async function initMedia() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const localVideo = document.getElementById('local-video');
+        if (localVideo) localVideo.srcObject = localStream;
+        await populateDeviceSelectors();
+        cleanupAudio();
+        try { analyserByCard.clear(); } catch (e) {}
+        setupAudioAnalyser(localStream, 'local-card');
+        initPeer();
+      } catch (err) {
+        document.getElementById('status-text').innerText = "Media Error: " + err.message;
+      }
+    }
+
+    // 2. PeerJS Setup with Metered OpenRelay TURN Fallback
+    function initPeer() {
+      cleanupAudio();
+      try { analyserByCard.clear(); } catch (e) {}
+      cleanupIncomingFile();
+      if (activeCall) {
+        try { activeCall.close(); } catch (e) {}
+        activeCall = null;
+      }
+      if (dataConnection) {
+        try { dataConnection.close(); } catch (e) {}
+        dataConnection = null;
+      }
+      if (peer) {
+        try { peer.destroy(); } catch (e) {}
+      }
+
+      const useRelayOnly = document.getElementById('privacy-mode').checked;
+      
+      peer = new Peer({
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { 
+              urls: 'turn:openrelay.metered.ca:80',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            }
+          ],
+          iceTransportPolicy: useRelayOnly ? 'relay' : 'all'
+        }
+      });
+
+      peer.on('open', id => {
+        document.getElementById('my-id-input').value = id;
+        document.getElementById('status-text').innerText = "Ready to connect.";
+      });
+
+      // Handle Incoming Call
+      peer.on('call', call => {
+        if (isRoomLocked) {
+          try { call.close(); } catch (e) {}
+          return alert("Call rejected: Room is locked.");
+        }
+        if (!localStream) {
+          try { call.close(); } catch (e) {}
+          alert("Local media not ready. Cannot answer call.");
+          return;
+        }
+        activeCall = call;
+        try {
+          call.answer(localStream);
+        } catch (e) {
+          try { call.close(); } catch (e2) {}
+          alert("Failed to answer call: " + e.message);
+          return;
+        }
+        call.on('stream', stream => handleRemoteStream(stream));
+        call.on('close', () => endCall());
+      });
+
+      // Handle Incoming Data Channel
+      peer.on('connection', conn => {
+        if (isRoomLocked) {
+          try { conn.close(); } catch (e) {}
+          return;
+        }
+        if (dataConnection) {
+          try { dataConnection.close(); } catch (e) {}
+        }
+        dataConnection = conn;
+        setupDataListeners();
+        conn.on('open', () => {
+          try {
+            if (whiteboardHistoryEnabled && whiteboardHistory.length > 0) {
+              conn.send({ type: 'whiteboard-sync', history: whiteboardHistory.slice(-5000) });
+            }
+            showToast('Peer connected');
+          } catch (e) {}
+        });
+      });
+    }
+
+    function connectToPeer() {
+      const peerId = document.getElementById('peer-id-input').value.trim();
+      if (!peerId) return alert("Enter Peer ID");
+      if (!localStream) {
+        alert("Local media not ready yet.");
+        return;
+      }
+      if (!peer) {
+        alert("Peer not initialized.");
+        return;
+      }
+
+      cleanupAudio();
+      try { analyserByCard.clear(); } catch (e) {}
+      cleanupIncomingFile();
+
+      if (dataConnection) {
+        try { dataConnection.close(); } catch (e) {}
+      }
+      try {
+        dataConnection = peer.connect(peerId);
+        setupDataListeners();
+        dataConnection.on('open', () => {
+          try {
+            if (whiteboardHistoryEnabled && whiteboardHistory.length > 0) {
+              dataConnection.send({ type: 'whiteboard-sync', history: whiteboardHistory.slice(-5000) });
+            }
+          } catch (e) {}
+        });
+      } catch (e) {
+        alert("Failed to connect to peer: " + e.message);
+        return;
+      }
+
+      if (activeCall) {
+        try { activeCall.close(); } catch (e) {}
+      }
+      try {
+        activeCall = peer.call(peerId, localStream);
+        activeCall.on('stream', stream => handleRemoteStream(stream));
+        activeCall.on('close', () => endCall());
+      } catch (e) {
+        alert("Failed to call peer: " + e.message);
+      }
+    }
+
+    function handleRemoteStream(stream) {
+      const remoteVideo = document.getElementById('remote-video');
+      if (remoteVideo) remoteVideo.srcObject = stream;
+      document.getElementById('status-text').innerText = "Connected to peer.";
+      // Clean up only remote card analyser, keep local
+      try {
+        cleanupAudioForCard('remote-card');
+      } catch (e) {}
+      setupAudioAnalyser(stream, 'remote-card');
+      // ensure local analyser exists
+      if (localStream) {
+        const localCard = document.getElementById('local-card');
+        if (!localCard || !analyserByCard.has(localCard)) {
+          setupAudioAnalyser(localStream, 'local-card');
+        }
+      }
+    }
+
+    // 3. Audio & Video In-Call Controls
+    function toggleAudio() {
+      try {
+        if (!localStream) {
+          alert('No local audio stream available.');
+          return;
+        }
+        const audioTrack = localStream.getAudioTracks()[0];
+        if (!audioTrack) {
+          alert('No microphone found.');
+          return;
+        }
+        isAudioMuted = !isAudioMuted;
+        audioTrack.enabled = !isAudioMuted;
+        const audioBtn = document.getElementById('audio-btn');
+        if (audioBtn) {
+          audioBtn.innerText = isAudioMuted ? "Unmute Mic" : "Mute Mic";
+          audioBtn.classList.toggle('active', isAudioMuted);
+        }
+      } catch (e) {
+        alert('Failed to toggle microphone: ' + e.message);
+      }
+    }
+
+    function toggleVideo() {
+      try {
+        if (!localStream) {
+          alert('No local video stream available.');
+          return;
+        }
+        const videoTrack = localStream.getVideoTracks()[0];
+        if (!videoTrack) {
+          alert('No camera found.');
+          return;
+        }
+        isVideoStopped = !isVideoStopped;
+        videoTrack.enabled = !isVideoStopped;
+        const videoBtn = document.getElementById('video-btn');
+        if (videoBtn) {
+          videoBtn.innerText = isVideoStopped ? "Start Cam" : "Stop Cam";
+          videoBtn.classList.toggle('active', isVideoStopped);
+        }
+      } catch (e) {
+        alert('Failed to toggle camera: ' + e.message);
+      }
+    }
+
+    function toggleLock() {
+      isRoomLocked = !isRoomLocked;
+      const lockBtn = document.getElementById('lock-btn');
+      if (lockBtn) {
+        lockBtn.innerText = isRoomLocked ? "Unlock Room" : "Lock Room";
+        lockBtn.classList.toggle('active', isRoomLocked);
+      }
+      showToast(isRoomLocked ? 'Room locked' : 'Room unlocked');
+    }
+
+    // 4. Device Selector Enumerate & Change
+    async function populateDeviceSelectors() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const micSelect = document.getElementById('mic-select');
+        const camSelect = document.getElementById('cam-select');
+
+        if (!micSelect || !camSelect) return;
+        micSelect.innerHTML = ''; camSelect.innerHTML = '';
+
+        devices.forEach(dev => {
+          const opt = document.createElement('option');
+          opt.value = dev.deviceId;
+          let label = dev.label;
+          if (!label) {
+            if (dev.kind === 'audioinput') label = 'Microphone';
+            else if (dev.kind === 'videoinput') label = 'Camera';
+            else label = dev.kind;
+          }
+          opt.text = label;
+
+          if (dev.kind === 'audioinput') micSelect.appendChild(opt);
+          if (dev.kind === 'videoinput') camSelect.appendChild(opt);
+        });
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    async function changeAudioInput() {
+      try {
+        const deviceId = document.getElementById('mic-select').value;
+        if (!deviceId) return;
+        const newStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+        const newTrack = newStream.getAudioTracks()[0];
+        if (!newTrack) return;
+
+        try {
+          const senders = activeCall?.peerConnection?.getSenders?.() || [];
+          const sender = senders.find(s => s.track && s.track.kind === 'audio');
+          if (sender) await sender.replaceTrack(newTrack);
+        } catch (e) {}
+
+        if (localStream.getAudioTracks()[0]) {
+          try { localStream.getAudioTracks()[0].stop(); } catch (e) {}
+          localStream.removeTrack(localStream.getAudioTracks()[0]);
+        }
+        localStream.addTrack(newTrack);
+      } catch (err) {
+        alert('Failed to switch microphone: ' + err.message);
+      }
+    }
+
+    async function changeVideoInput() {
+      try {
+        const deviceId = document.getElementById('cam-select').value;
+        if (!deviceId) return;
+        const newStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+        const newTrack = newStream.getVideoTracks()[0];
+        if (!newTrack) return;
+
+        try {
+          const senders = activeCall?.peerConnection?.getSenders?.() || [];
+          const sender = senders.find(s => s.track && s.track.kind === 'video');
+          if (sender) await sender.replaceTrack(newTrack);
+        } catch (e) {}
+
+        if (localStream.getVideoTracks()[0]) {
+          try { localStream.getVideoTracks()[0].stop(); } catch (e) {}
+          localStream.removeTrack(localStream.getVideoTracks()[0]);
+        }
+        localStream.addTrack(newTrack);
+        document.getElementById('local-video').srcObject = localStream;
+      } catch (err) {
+        alert('Failed to switch camera: ' + err.message);
+      }
+    }
+
+    // 5. Active Speaker Detector (Web Audio API)
+    function setupAudioAnalyser(stream, cardId) {
+      try {
+        if (!stream) return;
+        const audioTracks = typeof stream.getAudioTracks === 'function' ? stream.getAudioTracks() : [];
+        if (!audioTracks || audioTracks.length === 0) return;
+        const card = document.getElementById(cardId);
+        if (!card) return;
+
+        // Avoid duplicate analysers for same card
+        if (analyserByCard.has(card)) {
+          return;
+        }
+
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const audioCtx = new AudioContextClass();
+        try {
+          if (audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
+          }
+        } catch (e) {}
+        audioContexts.push(audioCtx);
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        const interval = setInterval(() => {
+          try {
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+            const avgVolume = sum / dataArray.length;
+            if (avgVolume > 15) {
+              card.classList.add('speaking');
+            } else {
+              card.classList.remove('speaking');
+            }
+          } catch (e) {
+            // ignore
+          }
+        }, 200);
+        speakerIntervals.push(interval);
+        const entry = { audioCtx, interval, source, analyser };
+        analyserByCard.set(card, entry);
+        analyserMap.set(card, entry);
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // 6. Data Channel Protocol (Chat, File Sharing, Whiteboard)
+    function setupDataListeners() {
+      if (!dataConnection) return;
+      dataConnection.on('data', data => {
+        try {
+          // Handle JSON payloads
+          if (data instanceof ArrayBuffer) {
+            if (!incomingFileInfo) return;
+            receivedChunks.push(data);
+            const total = receivedChunks.reduce((acc, curr) => acc + (curr.byteLength || 0), 0);
+            if (total >= incomingFileInfo.size) {
+              try {
+                const blob = new Blob(receivedChunks);
+                cleanupIncomingFile();
+                const url = URL.createObjectURL(blob);
+                incomingFileUrl = url;
+                const safeName = escapeHtml(incomingFileInfo.name || 'file');
+                appendMessage(`Received File: <a href="${url}" download="${safeName}" style="color:#00ff66">${safeName}</a>`, 'peer');
+              } catch (e) {
+                cleanupIncomingFile();
+              }
+            }
+            return;
+          }
+
+          if (typeof data === 'object') {
+            if (data.type === 'chat' && typeof data.text === 'string') {
+              appendMessage(escapeHtml(data.text), 'peer');
+              return;
+            }
+            if (data.type === 'draw' && typeof data.x1 === 'number' && typeof data.y1 === 'number' && typeof data.x2 === 'number' && typeof data.y2 === 'number') {
+              drawOnCanvas(data.x1, data.y1, data.x2, data.y2, false);
+              return;
+            }
+            if (data.type === 'clear') {
+              clearWhiteboard(false);
+              return;
+            }
+            if (data.type === 'file-meta' && typeof data.name === 'string' && typeof data.size === 'number') {
+              cleanupIncomingFile();
+              if (data.size > 100 * 1024 * 1024) {
+                return;
+              }
+              incomingFileInfo = { name: data.name, size: data.size };
+              receivedChunks = [];
+              return;
+            }
+            if (data.type === 'whiteboard-resize' && typeof data.width === 'number' && typeof data.height === 'number') {
+              try { redrawWhiteboard(); } catch (e) {}
+              return;
+            }
+            if (data.type === 'whiteboard-sync' && Array.isArray(data.history)) {
+              try {
+                whiteboardHistory = data.history.filter(h => h && h.type === 'draw');
+                redrawWhiteboard();
+              } catch (e) {}
+              return;
+            }
+            if (data.type === 'kahoot-question') {
+              try {
+                if (kahootRole === 'player') {
+                  kahootCurrentQuestion = data.question;
+                  const qd = document.getElementById('kahoot-question-display');
+                  if (qd) qd.textContent = kahootCurrentQuestion.q + ' (A:' + kahootCurrentQuestion.options[0] + ' B:' + kahootCurrentQuestion.options[1] + ' C:' + kahootCurrentQuestion.options[2] + ' D:' + kahootCurrentQuestion.options[3] + ')';
+                  const res = document.getElementById('kahoot-result');
+                  if (res) res.textContent = '';
+                }
+              } catch(e){}
+              return;
+            }
+            if (data.type === 'kahoot-answer') {
+              try {
+                if (kahootRole === 'host' && kahootCurrentQuestion && data.qid === kahootCurrentQuestion.id) {
+                  if (typeof data.answer === 'number' && data.answer >=0 && data.answer <=3) {
+                    kahootAnswers[data.answer]++;
+                    document.getElementById('kahoot-count-a').textContent = kahootAnswers[0];
+                    document.getElementById('kahoot-count-b').textContent = kahootAnswers[1];
+                    document.getElementById('kahoot-count-c').textContent = kahootAnswers[2];
+                    document.getElementById('kahoot-count-d').textContent = kahootAnswers[3];
+                  }
+                }
+              } catch(e){}
+              return;
+            }
+            if (data.type === 'kahoot-join') {
+              try {
+                if (kahootRole === 'host') {
+                  kahootPlayers.set(data.peerId, true);
+                  showToast('Player joined');
+                }
+              } catch(e){}
+              return;
+            }
+          }
+        } catch (e) {
+          // ignore malformed messages
+        }
+      });
+    }
+
+    // File Sharing via Chunking
+    async function sendFile() {
+      try {
+        const fileInput = document.getElementById('file-input');
+        const file = fileInput.files && fileInput.files[0];
+        if (!file || !dataConnection) {
+          alert('No file selected or not connected.');
+          return;
+        }
+        if (file.size > 100 * 1024 * 1024) {
+          alert('File too large (max 100MB).');
+          return;
+        }
+        if (dataConnection.open === false) {
+          alert('Data channel not open yet. Try again.');
+          return;
+        }
+
+        const chunkSize = 16384; // 16KB chunks
+        const progress = document.getElementById('file-progress');
+        if (progress) {
+          progress.style.display = 'block';
+          progress.value = 0;
+        }
+
+        try {
+          dataConnection.send({ type: 'file-meta', name: file.name, size: file.size });
+        } catch (e) {
+          throw e;
+        }
+
+        let offset = 0;
+        const controller = { aborted: false };
+        const timeout = setTimeout(() => { controller.aborted = true; }, 180000);
+        try {
+          while (offset < file.size) {
+            if (controller.aborted) throw new Error('Transfer timeout');
+            const slice = file.slice(offset, offset + chunkSize);
+            const buffer = await slice.arrayBuffer();
+            try {
+              // backpressure: wait a tick if channel seems busy
+              dataConnection.send(buffer);
+            } catch (e) {
+              throw e;
+            }
+            offset += chunkSize;
+            if (progress) progress.value = Math.min(100, (offset / file.size) * 100);
+            await new Promise(r => setTimeout(r, 1));
+          }
+        } finally {
+          clearTimeout(timeout);
+        }
+
+        if (progress) progress.style.display = 'none';
+        appendMessage(`Sent File: ${escapeHtml(file.name)}`, 'me');
+        if (fileInput) fileInput.value = '';
+      } catch (err) {
+        const progress = document.getElementById('file-progress');
+        if (progress) progress.style.display = 'none';
+        alert('File transfer failed: ' + err.message);
+      }
+    }
+
+    // Chat
+    function sendChatMessage() {
+      const input = document.getElementById('chat-input');
+      if (!input) return;
+      const text = input.value;
+      if (!text.trim() || !dataConnection) return;
+      try {
+        dataConnection.send({ type: 'chat', text: text });
+      } catch (e) {
+        alert('Failed to send message');
+        return;
+      }
+      appendMessage(escapeHtml(text), 'me');
+      input.value = '';
+    }
+
+    function appendMessage(msg, sender) {
+      const box = document.getElementById('chat-messages');
+      const div = document.createElement('div');
+      div.className = `message ${sender}`;
+      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      div.innerHTML = `<span style="opacity:0.7;font-size:0.7rem;">[${escapeHtml(time)}]</span> ${msg}`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    // Whiteboard Syncing
+    canvas.addEventListener('mousedown', startDrawing);
+    canvas.addEventListener('mousemove', draw);
+    canvas.addEventListener('mouseup', stopDrawing);
+    canvas.addEventListener('mouseleave', stopDrawing);
+    canvas.addEventListener('touchstart', startDrawingTouch, { passive: false });
+    canvas.addEventListener('touchmove', drawTouch, { passive: false });
+    canvas.addEventListener('touchend', stopDrawing);
+
+    let lastX = 0, lastY = 0;
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+    }
+    function getPosTouch(e) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const touch = e.touches[0];
+      return { x: (touch.clientX - rect.left) * scaleX, y: (touch.clientY - rect.top) * scaleY };
+    }
+
+    function startDrawing(e) {
+      isDrawing = true;
+      const pos = getPos(e);
+      lastX = pos.x; lastY = pos.y;
+    }
+    function startDrawingTouch(e) {
+      e.preventDefault();
+      isDrawing = true;
+      const pos = getPosTouch(e);
+      lastX = pos.x; lastY = pos.y;
+    }
+
+    function draw(e) {
+      if (!isDrawing) return;
+      const pos = getPos(e);
+      drawOnCanvas(lastX, lastY, pos.x, pos.y, true);
+      lastX = pos.x; lastY = pos.y;
+    }
+    function drawTouch(e) {
+      if (!isDrawing) return;
+      e.preventDefault();
+      const pos = getPosTouch(e);
+      drawOnCanvas(lastX, lastY, pos.x, pos.y, true);
+      lastX = pos.x; lastY = pos.y;
+    }
+
+    function stopDrawing() { isDrawing = false; }
+
+    function drawOnCanvas(x1, y1, x2, y2, emit) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#0070f3';
+      ctx.lineWidth = 2;
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      if (emit && dataConnection && dataConnection.open) {
+        try {
+          dataConnection.send({ type: 'draw', x1, y1, x2, y2 });
+        } catch (e) {}
+      }
+      if (whiteboardHistoryEnabled) {
+        try {
+          whiteboardHistory.push({ type: 'draw', x1, y1, x2, y2 });
+          if (whiteboardHistory.length > 10000) whiteboardHistory.shift();
+        } catch (e) {}
+      }
+    }
+
+    function clearWhiteboard(emit) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      whiteboardHistory = [];
+      if (emit && dataConnection && dataConnection.open) {
+        try { dataConnection.send({ type: 'clear' }); } catch (e) {}
+      }
+    }
+
+    function redrawWhiteboard() {
+      try {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        whiteboardHistory.forEach(item => {
+          if (item.type === 'draw' && typeof item.x1 === 'number') {
+            ctx.beginPath();
+            ctx.strokeStyle = '#0070f3';
+            ctx.lineWidth = 2;
+            ctx.moveTo(item.x1, item.y1);
+            ctx.lineTo(item.x2, item.y2);
+            ctx.stroke();
+          }
+        });
+      } catch (e) {}
+    }
+
+    // 7. Local Call Recorder
+    function toggleRecord() {
+      const recBtn = document.getElementById('rec-btn');
+      
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        try { mediaRecorder.stop(); } catch (e) {}
+        if (recBtn) {
+          recBtn.innerText = "Record Call";
+          recBtn.classList.remove('active');
+        }
+        return;
+      }
+      try {
+        recordedChunks = [];
+        const remoteVideo = document.getElementById('remote-video');
+        const tracks = [];
+        if (localStream) {
+          const localTracks = localStream.getTracks();
+          localTracks.forEach(t => { if (t.readyState === 'live') tracks.push(t); });
+        }
+        const remoteStream = remoteVideo && remoteVideo.srcObject;
+        if (remoteStream && typeof remoteStream.getTracks === 'function') {
+          const remoteTracks = remoteStream.getTracks();
+          remoteTracks.forEach(t => { if (t.readyState === 'live') tracks.push(t); });
+        }
+        if (tracks.length === 0) {
+          alert('No media tracks available to record.');
+          return;
+        }
+        const mixStream = new MediaStream(tracks);
+
+        if (typeof MediaRecorder === 'undefined') {
+          alert('MediaRecorder not supported in this browser.');
+          return;
+        }
+        let mimeType = 'video/webm;codecs=vp8,opus';
+        if (MediaRecorder.isTypeSupported && !MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'video/webm';
+        }
+        mediaRecorder = new MediaRecorder(mixStream, { mimeType });
+        mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          try {
+            const blob = new Blob(recordedChunks, { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `meeting-recording-${Date.now()}.webm`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          } catch (e) {
+            alert('Failed to save recording');
+          }
+          if (recBtn) {
+            recBtn.innerText = "Record Call";
+            recBtn.classList.remove('active');
+          }
+        };
+
+        mediaRecorder.start(1000);
+        if (recBtn) {
+          recBtn.innerText = "Stop Recording";
+          recBtn.classList.add('active');
+        }
+      } catch (err) {
+        alert('Failed to start recording: ' + err.message);
+      }
+    }
+
+    function reinitPeer() {
+      try {
+        cleanupAudio();
+        try { analyserByCard.clear(); } catch (e) {}
+        cleanupIncomingFile();
+        if (activeCall) {
+          try { activeCall.close(); } catch (e) {}
+          activeCall = null;
+        }
+        if (dataConnection) {
+          try { dataConnection.close(); } catch (e) {}
+          dataConnection = null;
+        }
+        const remoteVideo = document.getElementById('remote-video');
+        if (remoteVideo) remoteVideo.srcObject = null;
+        try { document.getElementById('remote-card')?.classList.remove('speaking'); } catch (e) {}
+        try { document.getElementById('local-card')?.classList.remove('speaking'); } catch (e) {}
+        initPeer();
+        document.getElementById('status-text').innerText = "Peer reinitialized. Reconnect to call.";
+      } catch (e) {
+        document.getElementById('status-text').innerText = "Failed to reinitialize peer.";
+      }
+    }
+    function endCall() {
+      try {
+        if (activeCall) {
+          activeCall.close();
+          activeCall = null;
+        }
+        if (dataConnection) {
+          dataConnection.close();
+          dataConnection = null;
+        }
+      } catch (e) {}
+      cleanupAudio();
+      try { analyserByCard.clear(); } catch (e) {}
+      cleanupIncomingFile();
+      const remoteVideo = document.getElementById('remote-video');
+      if (remoteVideo) remoteVideo.srcObject = null;
+      try {
+        document.getElementById('remote-card')?.classList.remove('speaking');
+      } catch (e) {}
+      try {
+        document.getElementById('local-card')?.classList.remove('speaking');
+      } catch (e) {}
+      try {
+        const audioBtn = document.getElementById('audio-btn');
+        if (audioBtn) {
+          audioBtn.innerText = isAudioMuted ? "Unmute Mic" : "Mute Mic";
+          audioBtn.classList.toggle('active', isAudioMuted);
+        }
+        const videoBtn = document.getElementById('video-btn');
+        if (videoBtn) {
+          videoBtn.innerText = isVideoStopped ? "Start Cam" : "Stop Cam";
+          videoBtn.classList.toggle('active', isVideoStopped);
+        }
+        const recBtn = document.getElementById('rec-btn');
+        if (recBtn && mediaRecorder && mediaRecorder.state === 'recording') {
+          try { mediaRecorder.stop(); } catch (e) {}
+        }
+        if (recBtn) {
+          recBtn.innerText = "Record Call";
+          recBtn.classList.remove('active');
+        }
+      } catch (e) {}
+      const progress = document.getElementById('file-progress');
+      if (progress) {
+        progress.style.display = 'none';
+        progress.value = 0;
+      }
+      document.getElementById('status-text').innerText = "Call ended.";
+    }
+    function copyMyId() {
+      try {
+        const val = document.getElementById('my-id-input').value;
+        if (!val) return;
+        navigator.clipboard.writeText(val);
+        showToast('Peer ID copied');
+      } catch (e) {
+        alert('Failed to copy ID');
+      }
+    }
+
+    function generateRoomCode() {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let code = '';
+      for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+      return code;
+    }
+
+    function createRoomCode() {
+      try {
+        if (!peer || !peer.id) {
+          alert('Peer not ready');
+          return;
+        }
+        const code = generateRoomCode();
+        document.getElementById('room-code-input').value = code;
+        document.getElementById('peer-id-input').value = peer.id;
+        showToast('Room created: ' + code + ' (share your Peer ID)');
+      } catch (e) {
+        alert('Failed to create room');
+      }
+    }
+
+    function joinRoomCode() {
+      try {
+        const code = document.getElementById('room-code-input').value.trim().toUpperCase();
+        if (!code) {
+          alert('Enter room code');
+          return;
+        }
+        // Try to connect using room code as peer ID if possible, else ask for peer ID
+        document.getElementById('peer-id-input').value = code;
+        connectToPeer();
+        showToast('Trying to join room: ' + code);
+      } catch (e) {
+        alert('Failed to join room');
+      }
+    }
+
+    // Enter to send chat
+    const chatInput = document.getElementById('chat-input');
+    if (chatInput) {
+      chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          sendChatMessage();
+        }
+      });
+    }
+
+    initMedia();
+  </script>
+</body>
+</html>
